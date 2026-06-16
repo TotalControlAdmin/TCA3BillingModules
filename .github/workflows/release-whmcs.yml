@@ -1,0 +1,81 @@
+name: Release WHMCS module
+
+# Publishes a WHMCS release whenever a tag like "whmcs-v1.2.3" is pushed.
+# Each platform in this monorepo uses its own tag prefix and gets its own
+# releases, so a WHMCS release only ever contains the WHMCS module.
+#
+# Cut a release:
+#   git tag whmcs-v1.0.0
+#   git push origin whmcs-v1.0.0
+on:
+  push:
+    tags:
+      - 'whmcs-v*'
+
+# Least privilege: creating a release only needs write access to repo contents.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+
+      - name: Build module zip and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          MODULE_PARENT="WHMCS/modules/servers"
+          MODULE_NAME="tcadmin3"
+          MODULE_DIR="$MODULE_PARENT/$MODULE_NAME"
+          README="WHMCS/README.md"
+          if [ ! -d "$MODULE_DIR" ]; then
+            echo "::error::Module folder '$MODULE_DIR' not found."
+            exit 1
+          fi
+          if [ ! -f "$README" ]; then
+            echo "::error::README '$README' not found."
+            exit 1
+          fi
+
+          # whmcs-v1.2.3 -> "v1.2.3" (release title) and "1.2.3" (zip filename)
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#whmcs-}"
+          VERSION_NUM="${TAG#whmcs-v}"
+          ASSET="${MODULE_NAME}-${VERSION_NUM}.zip"
+
+          # Bundle the WHMCS README inside the module folder so the docs travel
+          # with it (lands at modules/servers/tcadmin3/README.md after install).
+          # This copies into the disposable runner checkout only.
+          cp "$README" "$MODULE_DIR/README.md"
+
+          # Zip from inside modules/servers so the archive root is "tcadmin3/",
+          # which extracts straight into a WHMCS modules/servers/ directory.
+          # Defensive excludes keep dev artifacts out if they ever reappear.
+          ( cd "$MODULE_PARENT" && \
+            zip -r "$GITHUB_WORKSPACE/$ASSET" "$MODULE_NAME" \
+              -x "${MODULE_NAME}/vendor/*" \
+                 "${MODULE_NAME}/composer.json" \
+                 "${MODULE_NAME}/composer.lock" \
+                 "*/.DS_Store" )
+
+          echo "Packaged contents:"
+          unzip -l "$ASSET"
+
+          printf '%s\n\n%s\n' \
+            "TCAdmin3 provisioning module for WHMCS." \
+            "**Install:** unzip, then copy the \`tcadmin3\` folder into your WHMCS \`modules/servers/\` directory. See the README for full setup." \
+            > release-notes.md
+
+          # --latest=false: this is a multi-platform repo, so no single product's
+          # release should claim the repo-wide "Latest" badge. Drop this flag to
+          # let GitHub pick "Latest" automatically by version/date.
+          gh release create "$TAG" "$ASSET" \
+            --title "WHMCS — TCAdmin3 ${VERSION}" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            --latest=false
