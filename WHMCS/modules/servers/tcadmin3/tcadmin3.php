@@ -18,7 +18,6 @@ function tcadmin3_MetaData(): array
         'DefaultNonSSLPort' => '31000',
         'DefaultSSLPort' => '31001',
         'ServiceSingleSignOnLabel' => 'Login to TCAdmin as User',
-        'AdminSingleSignOnLabel' => 'Login to TCAdmin as Admin',
     ];
 }
 
@@ -28,12 +27,21 @@ function tcadmin3_MetaData(): array
 function tcadmin3_ConfigOptions($params): array
 {
     return [
-        'ConfigFile' => [
-            'FriendlyName' => 'Config File',
+        'LocationType' => [
+            'FriendlyName' => 'Location Type',
+            'Type' => 'dropdown',
+            'Options' => 'Region,Datacenter,Server,Virtual Server',
+            'Default' => 'Datacenter',
+            'Description' => 'How Location ID is interpreted. Region and Datacenter let TCAdmin auto-select a server in that location; Server and Virtual Server pin the service to an exact target. The module sends only the one target you select.',
+            'SimpleMode' => true
+        ],
+        'LocationID' => [
+            'FriendlyName' => 'Location ID',
             'Type' => 'text',
             'Size' => '25',
-            'Description' => 'Path to advanced configuration options',
-            'Default' => 'default.php',
+            'Description' => 'Numeric TCAdmin ID of the location target selected in Location Type (the region, datacenter, server, or virtual server ID). May also map to a Custom Field / Configurable Option.',
+            'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
+            'SimpleMode' => true
         ],
         'GameID' => [
             'FriendlyName' => 'Game ID',
@@ -43,31 +51,18 @@ function tcadmin3_ConfigOptions($params): array
             'Loader' => 'tcadmin3_LoadGames',
             'SimpleMode' => true
         ],
+        'ConfigFile' => [
+            'FriendlyName' => 'Config File',
+            'Type' => 'text',
+            'Size' => '25',
+            'Description' => 'Optional PHP file in the module\'s configs/ folder that supplies advanced API values not exposed as fields (service variables, affinity, memory/disk limits, etc.). Copy configs/default.php, edit your copy, and put its filename here. Blank uses default.php.',
+            'Default' => 'default.php',
+            'SimpleMode' => true,
+        ],
         'Slots' => [
             'Type' => 'text',
             'Size' => '25',
             'Description' => 'Number of player slots for the server',
-            'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
-            'SimpleMode' => true
-        ],
-        'Private' => [
-            'Type' => 'text',
-            'Size' => '25',
-            'Description' => 'Whether the server should be private or not',
-            'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
-            'SimpleMode' => true
-        ],
-        'Branded' => [
-            'Type' => 'text',
-            'Size' => '25',
-            'Description' => 'Whether the server should be branded or not',
-            'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
-            'SimpleMode' => true
-        ],
-        'Datacenter' => [
-            'Type' => 'text',
-            'Size' => '25',
-            'Description' => 'The datacenter to provision the service in',
             'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
             'SimpleMode' => true
         ],
@@ -78,10 +73,10 @@ function tcadmin3_ConfigOptions($params): array
             'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
             'SimpleMode' => true
         ],
-        'PrivatePassword' => [
+        'Branded' => [
             'Type' => 'text',
             'Size' => '25',
-            'Description' => 'The private password for the service',
+            'Description' => 'Whether the server should be branded or not',
             'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
             'SimpleMode' => true
         ],
@@ -92,7 +87,20 @@ function tcadmin3_ConfigOptions($params): array
             'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
             'SimpleMode' => true
         ],
-
+        'Private' => [
+            'Type' => 'text',
+            'Size' => '25',
+            'Description' => 'Whether the server should be private or not',
+            'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
+            'SimpleMode' => true
+        ],
+        'PrivatePassword' => [
+            'Type' => 'text',
+            'Size' => '25',
+            'Description' => 'The private password for the service',
+            'Loader' => 'tcadmin3_LoadCustomFieldsAndConfigOptions',
+            'SimpleMode' => true
+        ],
     ];
 }
 
@@ -105,11 +113,29 @@ function tcadmin3_TestConnection(array $params): array
 }
 
 /**
+ * Run a provisioning op: return 'success', or log the failure and return its message.
+ */
+function tcadmin3_runOperation(array $params, string $function, callable $operation): string
+{
+    try {
+        return $operation(new Handler($params));
+    } catch (Throwable $e) {
+        // Mask the API key and service password where they appear in the logged params.
+        $hidden = array_filter(
+            [$params['password'] ?? '', $params['serveraccesshash'] ?? ''],
+            fn($v) => $v !== ''
+        );
+        logModuleCall('tcadmin3', $function, $params, $e->getMessage(), '', $hidden);
+        return $e->getMessage();
+    }
+}
+
+/**
  * Create Account
  */
 function tcadmin3_CreateAccount(array $params): string
 {
-    return (new Handler($params))->createAccount();
+    return tcadmin3_runOperation($params, __FUNCTION__, fn(Handler $h) => $h->createAccount());
 }
 
 /**
@@ -117,7 +143,7 @@ function tcadmin3_CreateAccount(array $params): string
  */
 function tcadmin3_SuspendAccount(array $params): string
 {
-    return (new Handler($params))->suspendAccount();
+    return tcadmin3_runOperation($params, __FUNCTION__, fn(Handler $h) => $h->suspendAccount());
 }
 
 /**
@@ -125,7 +151,7 @@ function tcadmin3_SuspendAccount(array $params): string
  */
 function tcadmin3_UnsuspendAccount(array $params): string
 {
-    return (new Handler($params))->unsuspendAccount();
+    return tcadmin3_runOperation($params, __FUNCTION__, fn(Handler $h) => $h->unsuspendAccount());
 }
 
 /**
@@ -133,7 +159,7 @@ function tcadmin3_UnsuspendAccount(array $params): string
  */
 function tcadmin3_TerminateAccount(array $params): string
 {
-    return (new Handler($params))->terminateAccount();
+    return tcadmin3_runOperation($params, __FUNCTION__, fn(Handler $h) => $h->terminateAccount());
 }
 
 /**
@@ -141,7 +167,7 @@ function tcadmin3_TerminateAccount(array $params): string
  */
 function tcadmin3_ChangePassword(array $params): string
 {
-    return (new Handler($params))->changePassword();
+    return tcadmin3_runOperation($params, __FUNCTION__, fn(Handler $h) => $h->changePassword());
 }
 
 /**
@@ -149,7 +175,15 @@ function tcadmin3_ChangePassword(array $params): string
  */
 function tcadmin3_ChangePackage(array $params): string
 {
-    return (new Handler($params))->changePackage();
+    return tcadmin3_runOperation($params, __FUNCTION__, fn(Handler $h) => $h->changePackage());
+}
+
+/**
+ * Service Single Sign-On — the admin "Login to TCAdmin as User" button.
+ */
+function tcadmin3_ServiceSingleSignOn(array $params): array
+{
+    return (new Handler($params))->singleSignOn();
 }
 
 /**
@@ -166,6 +200,8 @@ function tcadmin3_ClientArea(array $params): array
             echo json_encode($handler->getServiceStatus());
         } elseif ($_POST['ajaxAction'] == 'performAction') {
             echo json_encode($handler->performAction($_POST['serviceAction']));
+        } elseif ($_POST['ajaxAction'] == 'singleSignOn') {
+            echo json_encode($handler->singleSignOn());
         }
         exit;
     }

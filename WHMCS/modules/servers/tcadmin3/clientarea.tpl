@@ -1,6 +1,11 @@
 <div class="card panel panel-default">
     <div class="card-body panel-body text-center">
         <h4>Service Management</h4>
+
+        <div style="margin-bottom: 15px;">
+            <button id="tcadmin3-sso" class="btn btn-primary"><i class="fas fa-sign-in-alt"></i> Login to Control Panel</button>
+        </div>
+
         <div id="tcadmin3-status-container" style="margin-bottom: 15px;">
             Status: <span id="tcadmin3-status" class="label label-default">Loading...</span>
         </div>
@@ -98,6 +103,42 @@
                         .attr('class', 'alert alert-danger')
                         .show();
                 }
+            });
+        });
+
+        jQuery('#tcadmin3-sso').click(function() {
+            let btn = jQuery(this);
+            btn.prop('disabled', true).addClass('disabled');
+            jQuery('#tcadmin3-message').hide();
+
+            // Open the tab inside the click so pop-up blockers allow it.
+            let panelWindow = window.open('', '_blank');
+
+            jQuery.post('clientarea.php?action=productdetails', {
+                id: '{$serviceid}',
+                ajaxAction: 'singleSignOn'
+            }, function(data) {
+                btn.prop('disabled', false).removeClass('disabled');
+                if (data.success && data.redirectTo) {
+                    if (panelWindow) {
+                        panelWindow.location = data.redirectTo;
+                    } else {
+                        window.location = data.redirectTo; // pop-up blocked: use current tab
+                    }
+                } else {
+                    if (panelWindow) panelWindow.close();
+                    jQuery('#tcadmin3-message')
+                        .text('Error: ' + (data.errorMsg || 'Could not sign in to the control panel.'))
+                        .attr('class', 'alert alert-danger')
+                        .show();
+                }
+            }).fail(function() {
+                if (panelWindow) panelWindow.close();
+                btn.prop('disabled', false).removeClass('disabled');
+                jQuery('#tcadmin3-message')
+                    .text('Error: could not reach the server. Please try again.')
+                    .attr('class', 'alert alert-danger')
+                    .show();
             });
         });
     });
