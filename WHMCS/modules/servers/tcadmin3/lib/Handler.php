@@ -57,18 +57,39 @@ class Handler
         }
 
         if ($userResponse->count === 0) {
-            // Create user
-            $userData = [
-                'billingId' => (string)$this->params['userid'],
-                'email' => $this->params['clientsdetails']['email'],
-                'firstName' => $this->params['clientsdetails']['firstname'],
-                'lastName' => $this->params['clientsdetails']['lastname'],
-                'username' => $this->generateUsername(),
-                'password' => $this->params['password'],
-                'userStatus' => 'Active',
-                'userType' => 'User'
-            ];
-            $newUser = $this->api->request('POST', 'User', ['json' => $userData], 'CreateUser');
+            // The service's Username field wins when an admin filled one in, otherwise fall back to
+            // the generated name. Strip everything outside [A-Za-z0-9._-]: the availability check
+            // interpolates the candidate into a Gridify filter unescaped.
+            $requested = preg_replace('/[^A-Za-z0-9._-]/', '', trim((string)($this->params['username'] ?? '')));
+            $baseUsername = $requested !== '' ? $requested : $this->generateUsername();
+
+            // Another provisioning run can take the name between the check and the POST, so retry
+            // the whole resolve + create when TCAdmin rejects the username as taken.
+            $newUser = null;
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                $userData = [
+                    'billingId' => (string)$this->params['userid'],
+                    'email' => $this->params['clientsdetails']['email'],
+                    'firstName' => $this->params['clientsdetails']['firstname'],
+                    'lastName' => $this->params['clientsdetails']['lastname'],
+                    'username' => $this->resolveAvailableUsername($baseUsername),
+                    'password' => $this->params['password'],
+                    'userStatus' => 'Active',
+                    'userType' => 'User'
+                ];
+
+                try {
+                    $newUser = $this->api->request('POST', 'User', ['json' => $userData], 'CreateUser');
+                    break;
+                } catch (Exception $e) {
+                    $message = strtolower($e->getMessage());
+                    $taken = str_contains($message, 'already exists') && str_contains($message, 'username');
+                    if (!$taken || $attempt === 3) {
+                        throw $e;
+                    }
+                }
+            }
+
             $userId = $newUser->userId;
             $username = $newUser->username;
 
@@ -77,26 +98,28 @@ class Handler
                 'query' => ['roleType' => 'User']
             ], 'SetUserRoleType');
         } else {
+            // An existing client keeps their TCAdmin username, whatever WHMCS holds on the service.
             $userId = $userResponse->data[0]->userId;
             $username = $userResponse->data[0]->username;
         }
 
-        // 3. Create Game Service
+        // 3. Write the resolved username back to WHMCS before provisioning, so the service shows
+        // the real TCAdmin name even if game-service creation fails.
+        if ($username) {
+            $service = Service::find($this->params['serviceid']);
+            if ($service && $service->username !== $username) {
+                $service->username = $username;
+                $service->save();
+            }
+        }
+
+        // 4. Create Game Service
         $apivalues = $this->buildProvisioningParams();
         $apivalues['ownerId'] = $userId;
 
         $this->api->request('POST', 'GameService/CreateGameService', [
             'json' => $apivalues
         ], 'CreateGameService');
-
-        // 4. Update WHMCS Service
-        if ($username) {
-            $service = Service::find($this->params['serviceid']);
-            if ($service) {
-                $service->username = $username;
-                $service->save();
-            }
-        }
 
         return 'success';
     }
@@ -291,6 +314,29 @@ class Handler
         }
 
         return $response->data[0];
+    }
+
+    /**
+     * Return the first TCAdmin username that is free, appending 1, 2, 3 ... to $base while it is
+     * taken (e.g. "jimmy" -> "jimmy1"). $base must already be sanitised for the Gridify filter.
+     *
+     * @throws Exception
+     */
+    protected function resolveAvailableUsername(string $base): string
+    {
+        for ($suffix = 0; $suffix < 100; $suffix++) {
+            $candidate = $suffix === 0 ? $base : $base . $suffix;
+
+            $response = $this->api->request('GET', 'User/Search', [
+                'query' => ['Filter' => "username={$candidate}"]
+            ], 'CheckUsername');
+
+            if ((int)($response->count ?? 0) === 0) {
+                return $candidate;
+            }
+        }
+
+        throw new Exception("No TCAdmin username was available for '{$base}' after 100 attempts.");
     }
 
     /**

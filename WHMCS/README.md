@@ -85,6 +85,14 @@ Edit your product → **Module Settings** tab:
 > or `ConfigOption:OptionName` — handy for letting customers pick their location or slots at
 > checkout.
 
+### Usernames
+
+The module reuses the client's existing TCAdmin user, matched by billing id — an existing client
+keeps their TCAdmin username. For a **new** client it uses the service's **Username** field if one
+is set, otherwise the client's first name plus their last-name initial. If that name is already
+taken in TCAdmin a number is appended (`jimmy` → `jimmy1`), and the WHMCS service's Username is
+updated to the final TCAdmin username.
+
 ---
 
 ## TCAdmin API key & permissions

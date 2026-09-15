@@ -86,6 +86,15 @@ class ApiClient
 
         $decoded = json_decode($body, true);
 
+        // TCAdmin's 500 envelope carries the generic "An error occurred while processing your
+        // request." at the top level and the real cause under errorDetails.message — prefer it.
+        if (is_array($decoded)) {
+            $detail = $decoded['errorDetails']['message'] ?? null;
+            if (is_string($detail) && trim($detail) !== '') {
+                return "TCAdmin API error ($status): " . trim($detail);
+            }
+        }
+
         if (is_array($decoded) && !empty($decoded['errors']) && is_array($decoded['errors'])) {
             $parts = [];
             foreach ($decoded['errors'] as $field => $messages) {
