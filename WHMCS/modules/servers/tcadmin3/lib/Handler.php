@@ -223,9 +223,19 @@ class Handler
         $newParams = $this->buildProvisioningParams();
         $apivalues = array_merge((array)$currentValues, $newParams);
 
-        $this->api->request('PUT', "GameService/$service->serviceId/UpdateGameService", [
+        $response = $this->api->request('PUT', "GameService/$service->serviceId/UpdateGameService", [
             'json' => $apivalues
         ], 'UpdateGameService');
+
+        // TCAdmin saves the settings before running AfterServiceUpdated scripts and still returns
+        // 200 when one fails, reporting it in scriptError. Older TCAdmin versions omit the field.
+        $scriptError = is_object($response) ? ($response->scriptError ?? null) : null;
+        if (is_string($scriptError) && trim($scriptError) !== '') {
+            throw new Exception(
+                'The package change was saved in TCAdmin, but an AfterServiceUpdated script failed: '
+                . trim($scriptError)
+            );
+        }
 
         return 'success';
     }
