@@ -523,32 +523,26 @@ class Handler
      */
     public function loadGames(): array
     {
-        $client = $this->api->getClient();
         $list = ['' => 'Custom'];
 
         try {
-            $promises = [
-                'servicecategories' => $client->getAsync("ServiceCategory/Search"),
-                'games' => $client->getAsync("Game/Search"),
-                'dockerblueprint' => $client->getAsync("DockerBlueprint/Search"),
-            ];
-
-            $responses = Utils::unwrap($promises);
-            $servicecategories = json_decode($responses['servicecategories']->getBody());
-            $games = json_decode($responses['games']->getBody());
-            $dockerblueprints = json_decode($responses['dockerblueprint']->getBody());
+            $results = $this->searchAll([
+                'servicecategories' => 'ServiceCategory/Search',
+                'games' => 'Game/Search',
+                'dockerblueprint' => 'DockerBlueprint/Search',
+            ]);
 
             $categoryMap = [];
-            foreach ($servicecategories->data as $category) {
+            foreach ($results['servicecategories'] as $category) {
                 $categoryMap[$category->categoryId] = str_replace(' Services', '', $category->name);
             }
 
-            foreach ($games->data as $game) {
+            foreach ($results['games'] as $game) {
                 $categoryName = $categoryMap[$game->categoryId] ?? 'Unknown';
                 $list[$game->blueprintId] = "[$categoryName] $game->name ($game->operatingSystem)";
             }
 
-            foreach ($dockerblueprints->data as $blueprint) {
+            foreach ($results['dockerblueprint'] as $blueprint) {
                 $list[$blueprint->blueprintId] = "[Docker] $blueprint->name";
             }
 
@@ -558,6 +552,64 @@ class Handler
         }
 
         return $list;
+    }
+
+    /**
+     * Rows requested per page from Gridify search endpoints. The API defaults to 20 when
+     * PageSize is omitted, which silently truncated the blueprint dropdown.
+     */
+    private const SEARCH_PAGE_SIZE = 500;
+
+    /**
+     * Fetch every row from several paged Search endpoints concurrently.
+     *
+     * Requests page 1 of each endpoint in parallel with a large page size, then fetches any
+     * remaining pages (based on the reported total `count`) in parallel as well.
+     *
+     * @param array<string, string> $endpoints key => endpoint path (e.g. 'Game/Search')
+     * @return array<string, array> key => list of decoded rows
+     */
+    protected function searchAll(array $endpoints): array
+    {
+        $client = $this->api->getClient();
+        $pageSize = self::SEARCH_PAGE_SIZE;
+        $query = static fn(int $page) => ['query' => ['Page' => $page, 'PageSize' => $pageSize]];
+        $decode = static function ($response, string $endpoint) {
+            $body = json_decode((string)$response->getBody());
+            if (!is_object($body) || !isset($body->data) || !is_array($body->data)) {
+                throw new Exception("Unexpected response from $endpoint");
+            }
+            return $body;
+        };
+
+        $first = Utils::unwrap(array_map(
+            static fn(string $endpoint) => $client->getAsync($endpoint, $query(1)),
+            $endpoints
+        ));
+
+        $results = [];
+        $pending = [];
+        foreach ($endpoints as $key => $endpoint) {
+            $body = $decode($first[$key], $endpoint);
+            $results[$key] = $body->data;
+
+            $total = (int)($body->count ?? count($body->data));
+            $pages = (int)ceil($total / $pageSize);
+            for ($page = 2; $page <= $pages; $page++) {
+                $pending["$key|$page"] = $client->getAsync($endpoint, $query($page));
+            }
+        }
+
+        if ($pending) {
+            $rest = Utils::unwrap($pending);
+            ksort($rest, SORT_NATURAL);
+            foreach ($rest as $id => $response) {
+                $key = explode('|', $id, 2)[0];
+                $results[$key] = array_merge($results[$key], $decode($response, $endpoints[$key])->data);
+            }
+        }
+
+        return $results;
     }
 
     /**
